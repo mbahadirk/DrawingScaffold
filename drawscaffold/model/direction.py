@@ -79,21 +79,33 @@ def calculate_modules(length: int, prefer_gaps: bool = False) -> list:
     if length < 100:
         return []
     
-    modules = []
-    remaining = length
+    # Optimization: Find combination of 250 and 150 modules that maximizes covered length
+    best_modules = []
+    max_covered = -1
     
-    # Fill with 250cm modules
-    while remaining >= 250:
-        modules.append(250)
-        remaining -= 250
+    # Try all valid counts of 250cm modules (from max possible down to 0)
+    max_250 = length // 250
     
-    # Fill remainder with 150cm modules
-    if not prefer_gaps:
-        while remaining >= 150:
-            modules.append(150)
-            remaining -= 150
-    
-    return modules
+    for count_250 in range(max_250, -1, -1):
+        remain_after_250 = length - (count_250 * 250)
+        
+        # Fill remainder with 150s
+        if prefer_gaps:
+             count_150 = 0
+        else:
+            count_150 = remain_after_250 // 150
+            
+        current_covered = (count_250 * 250) + (count_150 * 150)
+        
+        # Determine if this combination is better
+        # Priority 1: Maximize covered length (minimize gap)
+        # Priority 2: Use more 250s (implicit because we iterate from max_250 down)
+        
+        if current_covered > max_covered:
+            max_covered = current_covered
+            best_modules = [250] * count_250 + [150] * count_150
+
+    return best_modules
 
 
 def parse_facade_command(item: str) -> dict:
