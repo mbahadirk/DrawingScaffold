@@ -57,14 +57,27 @@ def convert_facades_to_segments(facades):
     if l_cmds:
         l_depth = 0
         for cmd in l_cmds:
+            # Standardize parsing: cmd is likely a string "type,pos,length,depth,side"
             parts = str(cmd).split(',')
-            if len(parts) >= 2 and parts[0] in ['inset', 'outset']:
-                try:
-                    d = int(parts[3]) if len(parts) > 3 else 0
-                    if parts[0] == 'inset': l_depth += d
-                    elif parts[0] == 'outset': l_depth -= d
-                except:
-                    pass
+            if len(parts) >= 2:
+                ftype = parts[0].strip().replace("'", "").replace('"', "")
+                if ftype in ['inset', 'outset']:
+                    try:
+                        # Depth is typically at index 3 for standardized commands
+                        # But user input might be "inset,pos,depth"
+                        # Top_down_main constructs: "type,pos,length,depth,side"
+                        # We need to handle both just in case, or rely on standardized index 3
+                        # If index 3 exists, use it. Else check index 2.
+                        d = 0
+                        if len(parts) > 3:
+                            d = int(parts[3])
+                        elif len(parts) > 2:
+                            d = int(parts[2])
+                            
+                        if ftype == 'inset': l_depth += d
+                        elif ftype == 'outset': l_depth -= d
+                    except:
+                        pass
         
         # Check if L ends with overlap against F
         if l_depth != 0:
