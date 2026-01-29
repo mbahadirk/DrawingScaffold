@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scaffold Planner UI</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            display: flex;
+            height: 100vh;
+            margin: 0;
+        }
+
+        #canvas-container {
+            flex: 1;
+            background: #f0f0f0;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #sidebar {
+            width: 300px;
+            padding: 20px;
+            background: #fff;
+            box-shadow: -2px 0 5px rgba(0, 0, 0, 0.1);
+            overflow-y: auto;
+        }
+
+        h1 {
+            font-size: 1.2rem;
+            margin-top: 0;
+        }
+
+        canvas {
+            background: white;
+            border: 1px solid #ccc;
+            cursor: crosshair;
+        }
+
+        .segment-input {
+            margin-bottom: 15px;
+            padding: 10px;
+            border: 1px solid #eee;
+            border-radius: 4px;
+        }
+
+        .segment-input label {
+            display: block;
+            font-size: 0.8rem;
+            margin-bottom: 5px;
+        }
+
+        input[type="number"] {
+            width: 100%;
+            padding: 5px;
+            box-sizing: border-box;
+        }
+
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            cursor: pointer;
+            border-radius: 4px;
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background: #0056b3;
+        }
+
+        #controls {
+            margin-bottom: 20px;
+        }
+
+        /* Soften the canvas background */
+        canvas {
+            background: #fcfcfc;
+            border: 1px solid #dcdcdc;
+            cursor: crosshair;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div id="canvas-container">
+        <canvas id="editor" width="800" height="600"></canvas>
+    </div>
+
+    <div id="sidebar">
+        <h1>Scaffold Planner</h1>
+        <div id="controls">
+            <p>1. Click on canvas to draw points.</p>
+            <p>2. Hold <strong>Shift</strong> or check box to snap angles.</p>
+            <p>3. Click 'Close Loop' to finish.</p>
+
+            <div style="margin-bottom: 10px;">
+                <input type="checkbox" id="snap-check"> <label for="snap-check" style="display:inline;">Snap to 0, 45,
+                    90°</label>
+            </div>
+
+            <button onclick="undoLast()">Undo Last Point</button>
+            <button onclick="closeLoop()">Close Loop</button>
+            <button onclick="reset()" style="background:#dc3545; margin-top:5px;">Reset</button>
+        </div>
+
+        <form id="scaffoldForm" onsubmit="submitForm(event)">
+            <div id="segments-list"></div>
+
+            <hr>
+            <label>Scaffold Height (cm)</label>
+            <input type="number" id="height" value="1000" required>
+
+            <label>Slope (degrees)</label>
+            <input type="number" id="slope" value="0" required>
+
+            <button type="submit" id="gen-btn" disabled>Generate Scaffold</button>
+        </form>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('editor');
+        const ctx = canvas.getContext('2d');
+        const segmentsList = document.getElementById('segments-list');
+        const genBtn = document.getElementById('gen-btn');
+        const snapCheck = document.getElementById('snap-check');
+
+        let points = [];
+        let isClosed = false;
+        let mousePos = { x: 0, y: 0 };
+        let isShiftDown = false;
+        const SNAP_DISTANCE = 15; // pixels
+
+        function resize() {
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+            draw();
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        window.addEventListener('keydown', (e) => { if (e.key === 'Shift') { isShiftDown = true; draw(); } });
+        window.addEventListener('keyup', (e) => { if (e.key === 'Shift') { isShiftDown = false; draw(); } });
+
+        canvas.addEventListener('mousemove', (e) => {
+            if (isClosed) return;
+            const rect = canvas.getBoundingClientRect();
+            mousePos.x = e.clientX - rect.left;
+            mousePos.y = e.clientY - rect.top;
+            draw();
+        });
+
+        canvas.addEventListener('click', (e) => {
+            if (isClosed) return;
+
+            let nextP = { x: mousePos.x, y: mousePos.y };
+
+            // 1. Point Snap (Priority)
+            let pointSnap = null;
+            for (let p of points) {
+                if (Math.hypot(p.x - nextP.x, p.y - nextP.y) < SNAP_DISTANCE) {
+                    pointSnap = p;
+                    break;
+                }
+            }
+
+            if (pointSnap) {
+                nextP = pointSnap;
+                if (points.length > 2 && pointSnap === points[0]) {
+                    closeLoop();
+                    return;
+                }
+            } else if (points.length > 0 && (isShiftDown || snapCheck.checked)) {
+                // 2. Angle Snap (Second Priority)
+                nextP = getSnappedPoint(points[points.length - 1], mousePos);
+            }
+
+            points.push(nextP);
+            draw();
+            updateForm();
+        });
+
+        function undoLast() {
+            if (isClosed) {
+                isClosed = false; // Re-open loop
+                genBtn.disabled = true;
+            } else if (points.length > 0) {
+                points.pop();
+            }
+            draw();
+            updateForm();
+        }
+
+        function getSnappedPoint(lastP, currentP) {
+            let dx = currentP.x - lastP.x;
+            let dy = currentP.y - lastP.y;
+            let angle = Math.atan2(dy, dx) * 180 / Math.PI;
+
+            // Snap to 0, 45, 90, 135, 180... (multiples of 45)
+            // Round to nearest 45
+            let snappedAngle = Math.round(angle / 45) * 45;
+            let dist = Math.hypot(dx, dy);
+
+            let rad = snappedAngle * Math.PI / 180;
+            return {
+                x: lastP.x + dist * Math.cos(rad),
+                y: lastP.y + dist * Math.sin(rad)
+            };
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Grid
+            ctx.strokeStyle = '#f4f4f4';
+            ctx.beginPath();
+            for (let x = 0; x < canvas.width; x += 20) { ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); }
+            for (let y = 0; y < canvas.height; y += 20) { ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); }
+            ctx.stroke();
+
+            // Existing Lines
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            if (points.length > 0) {
+                ctx.moveTo(points[0].x, points[0].y);
+                for (let i = 1; i < points.length; i++) {
+                    ctx.lineTo(points[i].x, points[i].y);
+                }
+                if (isClosed) {
+                    ctx.closePath();
+                    ctx.fillStyle = 'rgba(0, 123, 255, 0.1)';
+                    ctx.fill();
+                }
+            }
+            ctx.stroke();
+
+            // Persistent Length Labels
+            ctx.fillStyle = '#666';
+            ctx.font = '12px sans-serif';
+            ctx.textAlign = 'center';
+            if (points.length > 1) {
+                let loopCount = isClosed ? points.length : points.length - 1;
+                for (let i = 0; i < loopCount; i++) {
+                    let p1 = points[i];
+                    let p2 = points[(i + 1) % points.length];
+                    let midX = (p1.x + p2.x) / 2;
+                    let midY = (p1.y + p2.y) / 2;
+                    let distCm = Math.round(Math.hypot(p2.x - p1.x, p2.y - p1.y) * 5);
+
+                    ctx.save();
+                    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                    ctx.fillRect(midX - 25, midY - 10, 50, 14);
+                    ctx.restore();
+
+                    ctx.fillText(distCm + "cm", midX, midY + 2);
+                }
+            }
+
+            // Rubber banding (preview line) & Live Label
+            if (!isClosed && points.length > 0) {
+                let lastP = points[points.length - 1];
+                let targetP = { x: mousePos.x, y: mousePos.y };
+
+                // Point Snap Feedback Logic (Visual)
+                let snappedToPoint = false;
+                for (let p of points) {
+                    if (Math.hypot(p.x - targetP.x, p.y - targetP.y) < SNAP_DISTANCE) {
+                        targetP = p;
+                        snappedToPoint = true;
+                        break;
+                    }
+                }
+
+                if (!snappedToPoint && (isShiftDown || snapCheck.checked)) {
+                    targetP = getSnappedPoint(lastP, targetP);
+                }
+
+                ctx.strokeStyle = '#999';
+                ctx.setLineDash([5, 5]); // Dashed line
+                ctx.beginPath();
+                ctx.moveTo(lastP.x, lastP.y);
+                ctx.lineTo(targetP.x, targetP.y);
+                ctx.stroke();
+                ctx.setLineDash([]); // Reset
+
+                // Draw Snap Target Indicator
+                if (snappedToPoint) {
+                    ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+                    ctx.beginPath();
+                    ctx.arc(targetP.x, targetP.y, 6, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+
+                // Live Label
+                let midX = (lastP.x + targetP.x) / 2;
+                let midY = (lastP.y + targetP.y) / 2;
+                let distCm = Math.round(Math.hypot(targetP.x - lastP.x, targetP.y - lastP.y) * 5);
+
+                ctx.save();
+                ctx.fillStyle = 'rgba(255,255,255,0.7)';
+                ctx.fillRect(midX - 25, midY - 15, 50, 14);
+                ctx.restore();
+
+                ctx.fillStyle = '#d63384'; // Different color for live
+                ctx.fillText(distCm + "cm", midX, midY - 4);
+            }
+
+            // Points
+            ctx.fillStyle = '#007bff';
+            points.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function closeLoop() {
+            if (points.length < 3) return alert("Need at least 3 points");
+            isClosed = true;
+            draw();
+            updateForm();
+            genBtn.disabled = false;
+        }
+
+        function reset() {
+            points = [];
+            isClosed = false;
+            draw();
+            updateForm();
+            genBtn.disabled = true;
+        }
+
+        function updateForm() {
+            segmentsList.innerHTML = '';
+            if (points.length < 2) return;
+
+            let count = isClosed ? points.length : points.length - 1;
+
+            for (let i = 0; i < count; i++) {
+                let p1 = points[i];
+                let p2 = points[(i + 1) % points.length];
+                let dist = Math.hypot(p2.x - p1.x, p2.y - p1.y); // pixel distance
+
+                const div = document.createElement('div');
+                div.className = 'segment-input';
+                div.innerHTML = `
+                    <label><strong>Segment ${i + 1}</strong> (Direction: ${getDirection(p1, p2)})</label>
+                    <label>Length (cm):</label>
+                    <input type="number" name="seg_${i}" value="${Math.round(dist * 5)}" placeholder="Length in cm">
+                    <input type="hidden" name="dir_${i}" value="${getDirection(p1, p2)}">
+                `;
+                segmentsList.appendChild(div);
+            }
+        }
+
+        function getDirection(p1, p2) {
+            let dx = p2.x - p1.x;
+            let dy = p2.y - p1.y;
+            if (Math.abs(dx) > Math.abs(dy)) {
+                return dx > 0 ? "RIGHT" : "LEFT";
+            } else {
+                return dy > 0 ? "DOWN" : "UP";
+            }
+        }
+
+        async function submitForm(e) {
+            e.preventDefault();
+            const inputs = document.querySelectorAll('#segments-list input[type="number"]');
+            const dirs = document.querySelectorAll('#segments-list input[type="hidden"]');
+            let data = [];
+
+            // We need to use 'points' global var to attach coords
+            for (let i = 0; i < inputs.length; i++) {
+                let p1 = points[i];
+                let p2 = points[(i + 1) % points.length];
+
+                data.push({
+                    p1: p1,
+                    p2: p2,
+                    length: parseInt(inputs[i].value),
+                    direction: dirs[i].value
+                });
+            }
+
+            const payload = {
+                height: parseInt(document.getElementById('height').value),
+                slope: parseInt(document.getElementById('slope').value),
+                segments: data
+            };
+
+            try {
+                const res = await fetch('/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await res.json();
+                if (result.success) {
+                    alert('Success! Image generated: ' + result.image_path);
+                } else {
+                    alert('Error: ' + result.error);
+                }
+            } catch (err) {
+                alert('Network Error: ' + err);
+            }
+        }
+    </script>
+</body>
+
+</html>
