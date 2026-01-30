@@ -104,8 +104,21 @@ class SegmentDrawer:
             total_module_length = sum(modules)
             gap = dist - total_module_length
             
-            # Start with half gap to center modules
-            start_offset = max(0, gap / 2)
+            # Determine Alignment (Default to Center)
+            alignment = seg.get('alignment', 'center')
+            
+            if alignment == 'start':
+                start_offset = 0.0
+            elif alignment == 'end':
+                start_offset = gap
+            else:
+                # Center
+                start_offset = gap / 2.0
+                
+            # If gap is negative (overhang), start_offset checks:
+            # Start (0): Starts at P1. Ends strictly past P2? Yes. (P1 Flush)
+            # End (gap): Starts before P1. Ends at P2. (P2 Flush)
+            
             current_x = s1_x + dir_x * start_offset
             current_y = s1_y + dir_y * start_offset
             

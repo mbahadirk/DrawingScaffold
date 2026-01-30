@@ -67,7 +67,25 @@ class SegmentTopDownCalculator:
         
         for seg in drawing_data:
             # Pass the 'can_extend' flag to the logic
-            can_extend = seg.get('can_extend_end', False)
+            # Asymmetry Fix: Check BOTH Start and End.
+            can_extend_start = seg.get('can_extend_start', False)
+            can_extend_end = seg.get('can_extend_end', False)
+            
+            can_extend = can_extend_start or can_extend_end
+            
+            # Alignment Logic to Prevent Collisions on Closed End
+            # If only Start is Open (Backwards), align Flush End (P2) so we don't hit P2-Side Wall.
+            # If only End is Open (Forwards), align Flush Start (P1) so we don't hit P1-Side Wall.
+            # If Both or Neither, Center.
+            
+            alignment = 'center'
+            if can_extend_start and not can_extend_end:
+                alignment = 'end'
+            elif not can_extend_start and can_extend_end:
+                 alignment = 'start'
+                 
+            seg['alignment'] = alignment
+            
             seg['modules'] = self._process_segment_logic(seg['length'], seg['direction'], can_extend)
             
         return drawing_data
@@ -78,24 +96,25 @@ class SegmentTopDownCalculator:
         If a segment ends at a Convex corner, it can "overhang" into the void.
         """
         n = len(drawing_data)
-        # Assuming CW loop for 'is_cw' true in standard generation?
-        # Current _calculate_scaffold_geometry determines is_cw. 
-        # But we don't have it here.
-        # We can infer from cross product. 
-        # Standard: Convex turn (Right) -> Cross product > 0 (if CW).
-        # Let's check signed area of the scaffold polygon itself to determine CW/CCW.
         
-        # Use stored CW flag (robust)
-        if hasattr(self, 'is_cw'):
-             is_cw = self.is_cw
-        else:
-             # Fallback if not calculated yet (shouldn't happen)
-             area = 0.0
-             for i in range(n):
-                x1, y1 = drawing_data[i]['scaff_p1']['x'], drawing_data[i]['scaff_p1']['y']
-                x2, y2 = drawing_data[(i+1)%n]['scaff_p1']['x'], drawing_data[(i+1)%n]['scaff_p1']['y']
-                area += (x1 * y2 - x2 * y1)
-             is_cw = (area * 0.5) > 0
+        n = len(drawing_data)
+        
+        # Calculate Winding Order (Clockwise vs CCW) on the fly
+        # This ensures we use the ACTUAL scaffold loop geometry, regardless of cached flags.
+        area = 0.0
+        for i in range(n):
+            # Safe access with modulo
+            curr = drawing_data[i]
+            next_s = drawing_data[(i+1)%n]
+            
+            x1, y1 = curr['scaff_p1']['x'], curr['scaff_p1']['y']
+            # Note: For disjoint loops (due to corner cleaning), P2[i] != P1[i+1].
+            # But general path winding is preserved by using Representative Points (e.g. Starts).
+            x2, y2 = next_s['scaff_p1']['x'], next_s['scaff_p1']['y']
+            area += (x1 * y2 - x2 * y1)
+            
+        # Y-Down System: Positive Area = CW (Right Turns).
+        is_cw = (area * 0.5) > 0
 
         
         for i in range(n):
@@ -126,8 +145,90 @@ class SegmentTopDownCalculator:
                 # CCW Loop: Left Turn = Convex.
                 # Left Turn -> Cross Product NEGATIVE.
                 if cross < -0.01: is_open = True
+            
+            # Corner 'i' is the junction between seg (i) and next_seg (i+1).
+            # This junction is the END of seg and the START of next_seg.
+            
+            # --- Safety Check ---
+            # Even if geom says "Open", is there a wall nearby?
+            # Check if extending seg(Index i) forward hits anything.
+            safe_end = True
+            if is_open:
+                 safe_end = self._check_safety(seg, next_seg, drawing_data, check_type='END')
+                 
+            # Check if extending next_seg(Index i+1) backward hits anything.
+            safe_start = True
+            if is_open:
+                 safe_start = self._check_safety(next_seg, seg, drawing_data, check_type='START')
+
+            if is_open and safe_end:
+                 seg['can_extend_end'] = True
+            else:
+                 seg['can_extend_end'] = False
+                 
+            if is_open and safe_start:
+                 next_seg['can_extend_start'] = True
+            else:
+                 next_seg['can_extend_start'] = False
+
+    def _check_safety(self, subject_seg, adjacent_seg, all_segs, check_type='END'):
+        # Improved Safety Check (Multi-Point)
+        # Instead of just the tip, check a "corridor" to avoid inner-corner clipping.
+        
+        import math
+        p1 = subject_seg['scaff_p1']
+        p2 = subject_seg['scaff_p2']
+        dx = p2['x'] - p1['x']
+        dy = p2['y'] - p1['y']
+        L = math.hypot(dx, dy)
+        if L < 1: return False
+        ux, uy = dx/L, dy/L
+        
+        # Define Check Points along the extension
+        # 1px approx 5cm. Max potential overhang = 100cm (250 - 150).
+        # We should check up to 120cm (24px) to be safe.
+        # Check at 25cm(5), 50cm(10), 75cm(15), 100cm(20), 120cm(24)
+        check_distances = [5.0, 10.0, 15.0, 20.0, 24.0]
+        
+        # Threshold: Distance between Scaffold Center Lines.
+        # Scaffold width ~80cm. To be safe, we need > 80cm clearance.
+        # Let's match BUFFER_DISTANCE ~100cm (20px).
+        threshold = 20.0 
+        
+        for dist_px in check_distances:
+            if check_type == 'END':
+                test_x = p2['x'] + ux * dist_px
+                test_y = p2['y'] + uy * dist_px
+            else:
+                test_x = p1['x'] - ux * dist_px
+                test_y = p1['y'] - uy * dist_px
                 
-            seg['can_extend_end'] = is_open
+            # Check this point against all other segments
+            for other in all_segs:
+                if other is subject_seg: continue
+                if other is adjacent_seg: continue 
+                
+                d = self._point_segment_distance(test_x, test_y, other['scaff_p1'], other['scaff_p2'])
+                if d < threshold:
+                    return False
+                    
+        return True
+
+    def _point_segment_distance(self, px, py, s1, s2):
+        import math
+        x1, y1 = s1['x'], s1['y']
+        x2, y2 = s2['x'], s2['y']
+        
+        dx = x2 - x1
+        dy = y2 - y1
+        if dx == 0 and dy == 0: return math.hypot(px-x1, py-y1)
+        
+        t = ((px - x1) * dx + (py - y1) * dy) / (dx*dx + dy*dy)
+        t = max(0, min(1, t))
+        
+        nx = x1 + t * dx
+        ny = y1 + t * dy
+        return math.hypot(px - nx, py - ny)
 
     def _process_segment_logic(self, length, direction, can_extend=False):
         """
@@ -222,8 +323,8 @@ class SegmentTopDownCalculator:
         """
         import math
         
-        BUFFER_DISTANCE = 85  # cm - minimum distance (includes scaffold width + margin)
-        MAX_SHIFT_RATIO = 0.75  # Maximum shift = 50% of segment length
+        BUFFER_DISTANCE = 100  # cm - minimum distance (includes scaffold width + margin)
+        MAX_SHIFT_RATIO = 0.50  # Maximum shift = 50% of segment length
         
         for iteration in range(max_iterations):
             collisions = self._detect_collisions(drawing_data, BUFFER_DISTANCE)
