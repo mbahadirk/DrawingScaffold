@@ -218,8 +218,15 @@ def check_intersections(drawing_data):
     return False
 
 def main():
+    import argparse
     import datetime
+    
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--no-150", action="store_true", help="Avoid 150cm modules")
+    args = parser.parse_args()
+    
     print("Generating random scaffold project...")
+    print(f"Option No-150: {args.no_150}")
     
     # Retry Loop
     # We strictly discard any layout with collisions.
@@ -227,13 +234,15 @@ def main():
     valid_facades = None
     final_drawing_data = None
     final_h = 0
+    final_calc = None
     
     for attempt in range(max_retries):
         facades = generate_random_facades()
         segments = convert_facades_to_segments(facades)
         
         h = random.randint(500, 2000)
-        calc = SegmentTopDownCalculator(height=h, slope=0, verbose=False)
+        # Pass prefer_gaps flag
+        calc = SegmentTopDownCalculator(height=h, slope=0, verbose=False, prefer_gaps=args.no_150)
         
         # Get Geometry
         drawing_data = calc.get_scaffold_segments(segments)
@@ -247,13 +256,16 @@ def main():
             valid_facades = facades
             final_drawing_data = drawing_data
             final_h = h
+            final_calc = calc
             break
             
     if not valid_facades:
         print("Failed to generate valid layout after retries.")
         # Fallback? No, user wants clean output.
         return
-
+    
+    # ... (rest of the file as before, but use final_calc)
+    
     print(f"Facades Generated: {valid_facades}")
     
     # Create output directory
@@ -268,11 +280,9 @@ def main():
     
     try:
         # Draw
-        # We use a fresh calculator or reuse
-        calc = SegmentTopDownCalculator(height=final_h, slope=0, verbose=False)
-        
+        # Use the calculator instance that has the correct settings
         print(f"Drawing layout for height: {final_h}")
-        materials, dxf_path = calc.draw_scaffold_segments(final_drawing_data, project_path)
+        materials, dxf_path = final_calc.draw_scaffold_segments(final_drawing_data, project_path)
         
         print("Generated files:", dxf_path)
         print("Materials:", materials)
@@ -280,6 +290,7 @@ def main():
         with open(os.path.join(output_dir, "materials.txt"), "w") as f:
             f.write(f"Height: {final_h}\n")
             f.write(f"Facades: {valid_facades}\n")
+            f.write(f"Prefer Gaps: {args.no_150}\n")
             f.write("Materials:\n")
             for k, v in materials.items():
                  f.write(f"{k}: {v}\n")

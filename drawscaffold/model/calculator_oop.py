@@ -117,7 +117,7 @@ class SegmentTopDownCalculator:
                 collision_end = collision_end_i if shift_target_idx == i else collision_end_j
                 
                 # Calculate shift amount
-                shift_amount = overlap + 20  # 20cm extra buffer
+                shift_amount = overlap + 5  # 20cm extra buffer
                 max_shift = target['length'] * MAX_SHIFT_RATIO
                 shift_amount = min(shift_amount, max_shift)
                 
