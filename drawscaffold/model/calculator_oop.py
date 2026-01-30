@@ -62,12 +62,158 @@ class SegmentTopDownCalculator:
         drawing_data = self._resolve_collisions(drawing_data)
         
         # 3. Calculate modules for each segment after collision resolution
+        # First, classify corners to identify "Open/Convex" ends where overhang is allowed.
+        self._classify_corners(drawing_data)
+        
         for seg in drawing_data:
-            seg['modules'] = self._process_segment_logic(seg['length'], seg['direction'])
+            # Pass the 'can_extend' flag to the logic
+            can_extend = seg.get('can_extend_end', False)
+            seg['modules'] = self._process_segment_logic(seg['length'], seg['direction'], can_extend)
             
         return drawing_data
 
-    # ==================== COLLISION RESOLUTION ====================
+    def _classify_corners(self, drawing_data):
+        """
+        Identify corners as Convex (Open) or Concave (Closed).
+        If a segment ends at a Convex corner, it can "overhang" into the void.
+        """
+        n = len(drawing_data)
+        # Assuming CW loop for 'is_cw' true in standard generation?
+        # Current _calculate_scaffold_geometry determines is_cw. 
+        # But we don't have it here.
+        # We can infer from cross product. 
+        # Standard: Convex turn (Right) -> Cross product > 0 (if CW).
+        # Let's check signed area of the scaffold polygon itself to determine CW/CCW.
+        
+        # Use stored CW flag (robust)
+        if hasattr(self, 'is_cw'):
+             is_cw = self.is_cw
+        else:
+             # Fallback if not calculated yet (shouldn't happen)
+             area = 0.0
+             for i in range(n):
+                x1, y1 = drawing_data[i]['scaff_p1']['x'], drawing_data[i]['scaff_p1']['y']
+                x2, y2 = drawing_data[(i+1)%n]['scaff_p1']['x'], drawing_data[(i+1)%n]['scaff_p1']['y']
+                area += (x1 * y2 - x2 * y1)
+             is_cw = (area * 0.5) > 0
+
+        
+        for i in range(n):
+            seg = drawing_data[i]
+            next_seg = drawing_data[(i + 1) % n]
+            
+            # Vector 1 (Current)
+            dx1 = seg['scaff_p2']['x'] - seg['scaff_p1']['x']
+            dy1 = seg['scaff_p2']['y'] - seg['scaff_p1']['y']
+            
+            # Vector 2 (Next)
+            dx2 = next_seg['scaff_p2']['x'] - next_seg['scaff_p1']['x']
+            dy2 = next_seg['scaff_p2']['y'] - next_seg['scaff_p1']['y']
+            
+            # Cross Product (v1 x v2)
+            cross = dx1 * dy2 - dy1 * dx2
+            
+            # Determine if Open (Convex)
+            # Y-Down System:
+            # CW Loop: Right Turn = Convex.
+            # Right Turn -> Cross Product POSITIVE? 
+            # (1,0)x(0,1) = 1 (Right/Down). Yes.
+            
+            is_open = False
+            if is_cw:
+                if cross > 0.01: is_open = True
+            else:
+                # CCW Loop: Left Turn = Convex.
+                # Left Turn -> Cross Product NEGATIVE.
+                if cross < -0.01: is_open = True
+                
+            seg['can_extend_end'] = is_open
+
+    def _process_segment_logic(self, length, direction, can_extend=False):
+        """
+        Return list of module lengths to fill the given segment.
+        
+        Strategy:
+        - Maximize 250cm modules first.
+        - If 'can_extend' is True (Open/Convex end), we can pretend the segment is longer
+          (up to +100cm) IF it helps us fit a 250cm module instead of 150cm.
+        """
+        if length < 100 and not can_extend:
+            return []
+            
+        # Effective Max Length we can utilize
+        # If open end, we allow +90cm (just enough to turn a 160cm gap into 250)
+        # But we only use it if we decide to.
+        extension_limit = 100 if can_extend else 0
+        effective_limit = length + extension_limit
+        
+        scaffs = []
+        remaining = length
+        
+        # --- LOGIC WITH EXTENSION ---
+        # If we have enough space for 250 using extension, AND using it prevents a 150 fallback.
+        
+        # 1. Try filling with 250s normally
+        normal_250_count = int(length // 250)
+        normal_remainder = length - (normal_250_count * 250)
+        
+        # 2. Try filling with 250s using extension
+        extended_250_count = int(effective_limit // 250)
+        
+        # If extending allows us to add one more 250 module...
+        if extended_250_count > normal_250_count:
+             # Check if this new 250 module covers the valid length reasonably well?
+             # Actually, simpler: just take the extra 250.
+             # This effectively "eats" the remainder and overhangs.
+             # Limit: We shouldn't put a 250 if the actual wall is tiny (e.g. 10cm).
+             # But 'is_criminally_short' logic handles shrinking.
+             # User wants: "250cm iskeleler boş kısımlara doğru taşabilirler".
+             
+             # So we adopt the extended count.
+             for _ in range(extended_250_count):
+                 scaffs.append(250)
+             
+             # Remainder? The segment effectively ends here (overhung).
+             # We don't add 150s after an overhang.
+             remaining = 0 
+        else:
+             # Standard behavior
+             scaffs = [250] * normal_250_count
+             remaining = normal_remainder
+             
+             if remaining >= 150 and not self.prefer_gaps:
+                 if not scaffs: # User preference: Only 150 if forced
+                     scaffs.append(150)
+                     remaining -= 150
+             elif remaining >= 150 and not self.prefer_gaps:
+                  # If we allow mixing
+                  scaffs.append(150)
+                  remaining -= 150
+        
+        if self.verbose:
+            total_modules = sum(scaffs)
+            gap = length - total_modules
+            ext_str = "+EXT" if (can_extend and extended_250_count > normal_250_count) else ""
+            self.d.print(f"Segment {length}cm{ext_str} -> modules: {scaffs}, gap: {gap}cm")
+            
+        # Calculate materials (Side effect)
+        segment_slope = 0
+        if direction in ['RIGHT', 'LEFT']: 
+            segment_slope = self.slope
+
+        frontal_calculator2D(
+            length_list=scaffs,
+            h=self.height,
+            slope=segment_slope, 
+            toe_board=True, 
+            use_x_pattern=False, 
+            use_zigzag_pattern=True,
+            material_counter=self.material_counter, 
+            counter=self.top_down_counter, 
+            d=self.d
+        )
+        
+        return scaffs
     
     def _resolve_collisions(self, drawing_data, max_iterations=10):
         """
@@ -117,7 +263,7 @@ class SegmentTopDownCalculator:
                 collision_end = collision_end_i if shift_target_idx == i else collision_end_j
                 
                 # Calculate shift amount
-                shift_amount = overlap + 5  # 20cm extra buffer
+                shift_amount = overlap + 20  # 20cm extra buffer
                 max_shift = target['length'] * MAX_SHIFT_RATIO
                 shift_amount = min(shift_amount, max_shift)
                 
@@ -296,6 +442,7 @@ class SegmentTopDownCalculator:
             area += (pts[i]['x'] * pts[i+1]['y'] - pts[i+1]['x'] * pts[i]['y'])
         area *= 0.5
         is_cw = area > 0 # Y-Down System: CW is Positive Area
+        self.is_cw = is_cw # Store for later use
         
         # Offset Amount (Gap + Width)
         # Gap 25cm. Width 70cm approx or 75cm? Standard is ~73cm or 70cm? 
@@ -520,72 +667,5 @@ class SegmentTopDownCalculator:
              
         return calc_segments
 
-    def _process_segment_logic(self, length, direction):
-        """
-        Return list of module lengths to fill the given segment.
-        
-        Strategy (User Request):
-        - Maximize 250cm modules first.
-        - If 'prefer_gaps' is False (no-150 filter NOT active):
-            - Use 150cm module ONLY if remaining space >= 150cm.
-            - This effectively minimizes 150cm usage (max 1 per segment).
-        """
-        if length < 100:
-            # Too short for any module
-            return []
-        
-        scaffs = []
-        remaining = length
-        
-        # 1. Fill with 250cm modules (Greedy)
-        while remaining >= 240:
-            scaffs.append(250)
-            remaining -= 250
-        
-        # 2. Conditional 150cm usage
-        # Revised Strategy (User Request): 
-        # "Zorunda kalmadıkça 150cm kullanma" -> Only use 150cm if no 250cm modules could fit.
-        # If we already have 250cm modules, prefer leaving a gap rather than mixing 150cm.
-        
-        if remaining >= 150:
-            # Revised Strategy (User Request): 
-            # If "prefer_gaps" is True (User used --no-150), we NEVER use 150cm.
-            # We strictly prefer leaving a gap.
-            if self.prefer_gaps:
-                pass
-            
-            else:
-                # Normal logic (prefer_gaps=False means we allow 150cm)
-                # Only add 150cm if the segment is too short for a single 250cm module
-                # (i.e., this is a short wall segment or corner piece)
-                if len(scaffs) == 0:
-                    scaffs.append(150)
-                    remaining -= 150
-                
-                # Note: We already removed the logic for filling gaps with 150cm if 250cm exist.
-                # So this handles short segments and "zorunda kalmadıkça" logic.
-        
-        if self.verbose:
-            total_modules = sum(scaffs)
-            gap = length - total_modules
-            self.d.print(f"Segment {length}cm -> modules: {scaffs}, gap: {gap}cm")
-            
-        # Calculate materials (Side effect)
-        segment_slope = 0
-        if direction in ['RIGHT', 'LEFT']: 
-            segment_slope = self.slope
 
-        frontal_calculator2D(
-            length_list=scaffs,
-            h=self.height,
-            slope=segment_slope, 
-            toe_board=True, 
-            use_x_pattern=False, 
-            use_zigzag_pattern=True,
-            material_counter=self.material_counter, 
-            counter=self.top_down_counter, 
-            d=self.d
-        )
-        
-        return scaffs
 
