@@ -76,8 +76,8 @@ class SegmentTopDownCalculator:
         """
         import math
         
-        BUFFER_DISTANCE = 100  # cm - minimum distance (includes scaffold width + margin)
-        MAX_SHIFT_RATIO = 0.50  # Maximum shift = 50% of segment length
+        BUFFER_DISTANCE = 85  # cm - minimum distance (includes scaffold width + margin)
+        MAX_SHIFT_RATIO = 0.75  # Maximum shift = 50% of segment length
         
         for iteration in range(max_iterations):
             collisions = self._detect_collisions(drawing_data, BUFFER_DISTANCE)
@@ -182,9 +182,13 @@ class SegmentTopDownCalculator:
                         distance_px, closest_end_a, closest_end_b = self._segment_distance_with_ends(a1, a2, b1, b2)
                         distance_cm = distance_px * 5.0
                         
-                        # Scaffold width is ~73cm, so if centerlines are < 80cm apart at corners
-                        # there will be visual overlap
-                        corner_buffer = 80  # cm - scaffold width + small margin
+                        # Adaptive Corner Buffer (User Request: "Düşük güvenlik payı verelim")
+                        # Normal: 70cm
+                        # If segment is VERY short and squeezed (like inset depth), reduce to 40cm
+                        # to prevent it from disappearing completely (Sandwich effect).
+                        is_criminally_short = (len_a < 300) or (len_b < 300)
+                        corner_buffer = 60 if is_criminally_short else 70
+                        
                         if distance_cm < corner_buffer:
                             overlap = corner_buffer - distance_cm
                             collisions.append((i, j, overlap, closest_end_a, closest_end_b))
@@ -534,7 +538,7 @@ class SegmentTopDownCalculator:
         remaining = length
         
         # 1. Fill with 250cm modules (Greedy)
-        while remaining >= 250:
+        while remaining >= 240:
             scaffs.append(250)
             remaining -= 250
         
