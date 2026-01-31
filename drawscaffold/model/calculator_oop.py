@@ -432,8 +432,8 @@ class SegmentTopDownCalculator:
                     # Normal: 70cm
                     # If segment is VERY short and squeezed (like inset depth), reduce to 60cm
                     # to prevent it from disappearing completely (Sandwich effect).
-                    is_criminally_short = (len_a < 300) or (len_b < 300)
-                    corner_buffer = 60 if is_criminally_short else 70
+                    is_criminally_short = (len_a < 350) or (len_b < 350)
+                    corner_buffer = 20 if is_criminally_short else 70
                     
                     if distance_cm < corner_buffer:
                         overlap = corner_buffer - distance_cm
