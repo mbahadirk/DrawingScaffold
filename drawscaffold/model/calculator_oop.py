@@ -193,7 +193,7 @@ class SegmentTopDownCalculator:
         # Threshold: Distance between Scaffold Center Lines.
         # Scaffold width ~80cm. To be safe, we need > 80cm clearance.
         # Let's match BUFFER_DISTANCE ~100cm (20px).
-        threshold = 20.0 
+        threshold = 40.0 
         
         for dist_px in check_distances:
             if check_type == 'END':
@@ -423,22 +423,21 @@ class SegmentTopDownCalculator:
                     len_a = math.hypot(a2[0]-a1[0], a2[1]-a1[1]) * 5.0  # px to cm
                     len_b = math.hypot(b2[0]-b1[0], b2[1]-b1[1]) * 5.0
                     
-                    # Only check collision for L-corners with short perpendicular segments
-                    # where scaffold width matters
-                    if len_a < 400 or len_b < 400:  # Short segments = perpendicular stubs
-                        distance_px, closest_end_a, closest_end_b = self._segment_distance_with_ends(a1, a2, b1, b2)
-                        distance_cm = distance_px * 5.0
-                        
-                        # Adaptive Corner Buffer (User Request: "Düşük güvenlik payı verelim")
-                        # Normal: 70cm
-                        # If segment is VERY short and squeezed (like inset depth), reduce to 40cm
-                        # to prevent it from disappearing completely (Sandwich effect).
-                        is_criminally_short = (len_a < 300) or (len_b < 300)
-                        corner_buffer = 60 if is_criminally_short else 70
-                        
-                        if distance_cm < corner_buffer:
-                            overlap = corner_buffer - distance_cm
-                            collisions.append((i, j, overlap, closest_end_a, closest_end_b))
+                    # Always check collision for L-corners to prevent overlapping on long walls (e.g. outsets)
+                    # Previously limited to < 400cm, which skipped checks for large outsets.
+                    distance_px, closest_end_a, closest_end_b = self._segment_distance_with_ends(a1, a2, b1, b2)
+                    distance_cm = distance_px * 5.0
+                    
+                    # Adaptive Corner Buffer (User Request: "Düşük güvenlik payı verelim")
+                    # Normal: 70cm
+                    # If segment is VERY short and squeezed (like inset depth), reduce to 60cm
+                    # to prevent it from disappearing completely (Sandwich effect).
+                    is_criminally_short = (len_a < 300) or (len_b < 300)
+                    corner_buffer = 60 if is_criminally_short else 70
+                    
+                    if distance_cm < corner_buffer:
+                        overlap = corner_buffer - distance_cm
+                        collisions.append((i, j, overlap, closest_end_a, closest_end_b))
                 else:
                     # Non-adjacent: normal distance check
                     distance_px, closest_end_a, closest_end_b = self._segment_distance_with_ends(a1, a2, b1, b2)

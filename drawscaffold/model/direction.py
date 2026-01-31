@@ -83,7 +83,7 @@ def calculate_modules(length: int, prefer_gaps: bool = False) -> list:
     remaining = length
     
     # Fill with 250cm modules
-    while remaining >= 245:
+    while remaining >= 220:
         modules.append(250)
         remaining -= 250
     
