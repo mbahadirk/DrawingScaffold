@@ -2,6 +2,7 @@ from drawscaffold.calculate_top_down import frontal_calculator2D, MaterialCounte
 from drawscaffold.utils.debug_printer import DebugPrinter
 from drawscaffold.calculator.calculator_top_down import CalculatorTopDown
 from drawscaffold.model.segment_drawer import SegmentDrawer
+from drawscaffold.const.collision_config import SAFETY_THRESHOLD, CRITICAL_SHORT_DISTANCE, SHORT_WALL_BUFFER, NORMAL_WALL_BUFFER
 
 class SegmentTopDownCalculator:
     def __init__(self, height, slope, verbose=False, prefer_gaps=False):
@@ -193,7 +194,7 @@ class SegmentTopDownCalculator:
         # Threshold: Distance between Scaffold Center Lines.
         # Scaffold width ~80cm. To be safe, we need > 80cm clearance.
         # Let's match BUFFER_DISTANCE ~100cm (20px).
-        threshold = 40.0 
+        threshold = SAFETY_THRESHOLD 
         
         for dist_px in check_distances:
             if check_type == 'END':
@@ -432,8 +433,8 @@ class SegmentTopDownCalculator:
                     # Normal: 70cm
                     # If segment is VERY short and squeezed (like inset depth), reduce to 60cm
                     # to prevent it from disappearing completely (Sandwich effect).
-                    is_criminally_short = (len_a < 350) or (len_b < 350)
-                    corner_buffer = 20 if is_criminally_short else 70
+                    is_criminally_short = (len_a < CRITICAL_SHORT_DISTANCE) or (len_b < CRITICAL_SHORT_DISTANCE)
+                    corner_buffer = SHORT_WALL_BUFFER if is_criminally_short else NORMAL_WALL_BUFFER
                     
                     if distance_cm < corner_buffer:
                         overlap = corner_buffer - distance_cm

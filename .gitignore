@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 /outputs/
 /manual_output/
+debug_extra_line.py
